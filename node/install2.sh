@@ -213,6 +213,69 @@ if [ ! -f "${XRAY_DIR}/Xray-linux-64.zip" ]; then
   exit 1
 fi
 
+# 验证 Xray SHA256 校验和（优化弱性能服务器）
+log_info "Verifying Xray-core SHA256 checksum..."
+_xray_archive="Xray-linux-64.zip"
+_xray_gh_api="https://api.github.com/repos/XTLS/Xray-core/releases/tags/${VERSION_XRAY}"
+_json_tmp="/tmp/xray_release_$$.json"
+
+# 下载 API 响应到临时文件（减少内存占用）
+curl -sSL --connect-timeout 10 --max-time 15 \
+  -o "$_json_tmp" "$_xray_gh_api" 2>&1 || true
+
+if [ ! -f "$_json_tmp" ] || [ ! -s "$_json_tmp" ]; then
+  log_warn "Failed to fetch release info from GitHub API, skipping verification"
+  rm -f "$_json_tmp" 2>/dev/null || true
+else
+  # 单次流式读取提取 SHA256（优化 I/O 效率）
+  EXPECTED_HASH=$(awk -v filename="${_xray_archive}" '
+    $0 ~ "\"name\": \"" filename "\"" { found=1 }
+    found && $0 ~ "\"digest\": \"sha256:" {
+      match($0, /sha256:[^"]+/)
+      hash = substr($0, RSTART+7, RLENGTH-7)
+      print hash
+      exit
+    }
+  ' "$_json_tmp")
+
+  # 立即删除临时文件
+  rm -f "$_json_tmp" 2>/dev/null || true
+
+  if [ -z "$EXPECTED_HASH" ]; then
+    log_warn "No SHA256 digest found for ${_xray_archive}, skipping verification"
+  else
+    log_info "Extracted SHA256 digest from API response"
+
+    # 计算本地 SHA256 哈希值
+    if command -v sha256sum >/dev/null 2>&1; then
+      LOCAL_HASH=$(sha256sum "${XRAY_DIR}/${_xray_archive}" | awk '{print $1}')
+    elif command -v openssl >/dev/null 2>&1; then
+      LOCAL_HASH=$(openssl dgst -sha256 "${XRAY_DIR}/${_xray_archive}" 2>/dev/null | awk '{print $NF}')
+      if [ -z "$LOCAL_HASH" ]; then
+        log_error "Failed to compute local SHA256 hash via openssl"
+        exit 1
+      fi
+    else
+      log_error "No SHA256 utility available (sha256sum or openssl required)"
+      exit 1
+    fi
+
+    echo ""
+    echo "  Expected SHA256: ${EXPECTED_HASH}"
+    echo "  Local SHA256:    ${LOCAL_HASH}"
+    echo ""
+
+    if [ "$EXPECTED_HASH" = "$LOCAL_HASH" ]; then
+      log_ok "SHA256 checksum verification — passed"
+    else
+      log_error "SHA256 checksum verification — failed (file may be corrupted or tampered)"
+      log_error "Expected: ${EXPECTED_HASH}"
+      log_error "Got:      ${LOCAL_HASH}"
+      exit 1
+    fi
+  fi
+fi
+
 # 解压压缩包
 run_cmd "Extract Xray archive" \
   unzip -o "${XRAY_DIR}/Xray-linux-64.zip" -d "$XRAY_DIR"
@@ -312,6 +375,69 @@ if [ ! -f "${HY2_DIR}/h2" ]; then
   exit 1
 fi
 
+# 验证 Hysteria2 SHA256 校验和（优化弱性能服务器）
+log_info "Verifying Hysteria2 SHA256 checksum..."
+_hy2_binary="hysteria-linux-amd64"
+_hy2_gh_api="https://api.github.com/repos/apernet/hysteria/releases/tags/app/${VERSION_HY2}"
+_json_tmp="/tmp/hy2_release_$$.json"
+
+# 下载 API 响应到临时文件（减少内存占用）
+curl -sSL --connect-timeout 10 --max-time 15 \
+  -o "$_json_tmp" "$_hy2_gh_api" 2>&1 || true
+
+if [ ! -f "$_json_tmp" ] || [ ! -s "$_json_tmp" ]; then
+  log_warn "Failed to fetch release info from GitHub API, skipping verification"
+  rm -f "$_json_tmp" 2>/dev/null || true
+else
+  # 单次流式读取提取 SHA256（优化 I/O 效率）
+  EXPECTED_HASH=$(awk -v filename="${_hy2_binary}" '
+    $0 ~ "\"name\": \"" filename "\"" { found=1 }
+    found && $0 ~ "\"digest\": \"sha256:" {
+      match($0, /sha256:[^"]+/)
+      hash = substr($0, RSTART+7, RLENGTH-7)
+      print hash
+      exit
+    }
+  ' "$_json_tmp")
+
+  # 立即删除临时文件
+  rm -f "$_json_tmp" 2>/dev/null || true
+
+  if [ -z "$EXPECTED_HASH" ]; then
+    log_warn "No SHA256 digest found for ${_hy2_binary}, skipping verification"
+  else
+    log_info "Extracted SHA256 digest from API response"
+
+    # 计算本地 SHA256 哈希值
+    if command -v sha256sum >/dev/null 2>&1; then
+      LOCAL_HASH=$(sha256sum "${HY2_DIR}/h2" | awk '{print $1}')
+    elif command -v openssl >/dev/null 2>&1; then
+      LOCAL_HASH=$(openssl dgst -sha256 "${HY2_DIR}/h2" 2>/dev/null | awk '{print $NF}')
+      if [ -z "$LOCAL_HASH" ]; then
+        log_error "Failed to compute local SHA256 hash via openssl"
+        exit 1
+      fi
+    else
+      log_error "No SHA256 utility available (sha256sum or openssl required)"
+      exit 1
+    fi
+
+    echo ""
+    echo "  Expected SHA256: ${EXPECTED_HASH}"
+    echo "  Local SHA256:    ${LOCAL_HASH}"
+    echo ""
+
+    if [ "$EXPECTED_HASH" = "$LOCAL_HASH" ]; then
+      log_ok "SHA256 checksum verification — passed"
+    else
+      log_error "SHA256 checksum verification — failed (file may be corrupted or tampered)"
+      log_error "Expected: ${EXPECTED_HASH}"
+      log_error "Got:      ${LOCAL_HASH}"
+      exit 1
+    fi
+  fi
+fi
+
 # 设置可执行权限
 run_cmd "Set h2 executable permissions" \
   chmod +x "${HY2_DIR}/h2"
@@ -395,6 +521,74 @@ else
     log_error "File download failed: ${KOMARI_INSTALL_DIR}/agent"
     exit 1
   fi
+
+  # 验证 Komari Agent SHA256 校验和（优化弱性能服务器）
+  log_info "Verifying Komari Agent SHA256 checksum..."
+  if [ -n "$KOMARI_VERSION" ]; then
+    _komari_gh_api="https://api.github.com/repos/komari-monitor/komari-agent/releases/tags/${KOMARI_VERSION}"
+  else
+    _komari_gh_api="https://api.github.com/repos/komari-monitor/komari-agent/releases/latest"
+  fi
+  _json_tmp="/tmp/komari_release_$$.json"
+
+  # 下载 API 响应到临时文件（减少内存占用）
+  curl -sSL --connect-timeout 10 --max-time 15 \
+    -o "$_json_tmp" "$_komari_gh_api" 2>&1 || true
+
+  if [ ! -f "$_json_tmp" ] || [ ! -s "$_json_tmp" ]; then
+    log_warn "Failed to fetch release info from GitHub API, skipping verification"
+    rm -f "$_json_tmp" 2>/dev/null || true
+  else
+    # 单次流式读取提取 SHA256（优化 I/O 效率）
+    EXPECTED_HASH=$(awk -v filename="${_komari_file}" '
+      $0 ~ "\"name\": \"" filename "\"" { found=1 }
+      found && $0 ~ "\"digest\": \"sha256:" {
+        match($0, /sha256:[^"]+/)
+        hash = substr($0, RSTART+7, RLENGTH-7)
+        print hash
+        exit
+      }
+    ' "$_json_tmp")
+
+    # 立即删除临时文件
+    rm -f "$_json_tmp" 2>/dev/null || true
+
+    if [ -z "$EXPECTED_HASH" ]; then
+      log_warn "No SHA256 digest found for ${_komari_file}, skipping verification"
+    else
+      log_info "Extracted SHA256 digest from API response"
+
+      # 计算本地 SHA256 哈希值
+      if command -v sha256sum >/dev/null 2>&1; then
+        LOCAL_HASH=$(sha256sum "${KOMARI_INSTALL_DIR}/agent" | awk '{print $1}')
+      elif command -v openssl >/dev/null 2>&1; then
+        LOCAL_HASH=$(openssl dgst -sha256 "${KOMARI_INSTALL_DIR}/agent" 2>/dev/null | awk '{print $NF}')
+        if [ -z "$LOCAL_HASH" ]; then
+          log_error "Failed to compute local SHA256 hash via openssl"
+          exit 1
+        fi
+      else
+        log_warn "No SHA256 utility available, skipping verification"
+      fi
+
+      if [ -n "$LOCAL_HASH" ]; then
+        echo ""
+        echo "  Expected SHA256: ${EXPECTED_HASH}"
+        echo "  Local SHA256:    ${LOCAL_HASH}"
+        echo ""
+
+        if [ "$EXPECTED_HASH" = "$LOCAL_HASH" ]; then
+          log_ok "SHA256 checksum verification — passed"
+        else
+          log_error "SHA256 checksum verification — failed (file may be corrupted or tampered)"
+          log_error "Expected: ${EXPECTED_HASH}"
+          log_error "Got:      ${LOCAL_HASH}"
+          exit 1
+        fi
+      fi
+    fi
+  fi
+
   _komari_size=$(wc -c < "${KOMARI_INSTALL_DIR}/agent" 2>/dev/null | tr -d ' ')
   log_ok "Komari agent binary downloaded (${_komari_size} bytes)"
 

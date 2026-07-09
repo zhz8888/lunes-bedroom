@@ -244,53 +244,55 @@ _api_body=$(echo "$_api_resp" | sed '$d')
 if [ "$_api_code" != "200" ]; then
   log_warn "GitHub API returned HTTP ${_api_code}, unable to fetch checksum, skipping verification"
 else
-  # 查找与下载压缩包匹配的 SHA256 校验和文件地址
-  _checksum_url=$(echo "$_api_body" | \
-    grep -o '"browser_download_url": "[^"]*'"${ARCHIVE_FILENAME}"'\.sha256"' | \
-    cut -d'"' -f4)
+  # 将 API 响应保存到临时文件（优化弱性能服务器）
+  _json_tmp="/tmp/openlist_release_$$.json"
+  echo "$_api_body" > "$_json_tmp"
 
-  if [ -z "$_checksum_url" ]; then
-    log_warn "No SHA256 checksum asset found in release, skipping verification"
+  # 单次流式读取提取 SHA256（优化 I/O 效率）
+  EXPECTED_HASH=$(awk -v filename="${ARCHIVE_FILENAME}" '
+    $0 ~ "\"name\": \"" filename "\"" { found=1 }
+    found && $0 ~ "\"digest\": \"sha256:" {
+      match($0, /sha256:[^"]+/)
+      hash = substr($0, RSTART+7, RLENGTH-7)
+      print hash
+      exit
+    }
+  ' "$_json_tmp")
+
+  # 立即删除临时文件
+  rm -f "$_json_tmp" 2>/dev/null || true
+
+  if [ -z "$EXPECTED_HASH" ]; then
+    log_warn "No SHA256 digest found for ${ARCHIVE_FILENAME}, skipping verification"
   else
-    log_info "Downloading checksum file..."
-    if curl -sSL -o "${ARCHIVE_FILE}.sha256" --connect-timeout 10 --max-time 15 "$_checksum_url"; then
-      # 期望哈希值为第一个空白字符分隔的字段
-      read -r EXPECTED_HASH _ < "${ARCHIVE_FILE}.sha256" || true
+    log_info "Extracted SHA256 digest from API response"
 
-      # 计算本地 SHA256 哈希值
-      if command -v sha256sum >/dev/null 2>&1; then
-        LOCAL_HASH=$(sha256sum "$ARCHIVE_FILE" | awk '{print $1}')
-      elif command -v openssl >/dev/null 2>&1; then
-        LOCAL_HASH=$(openssl dgst -sha256 "$ARCHIVE_FILE" 2>/dev/null | awk '{print $NF}')
-        if [ -z "$LOCAL_HASH" ]; then
-          log_error "Failed to compute local SHA256 hash via openssl"
-          rm -f "${ARCHIVE_FILE}.sha256"
-          exit 1
-        fi
-      else
-        log_error "No SHA256 utility available (sha256sum or openssl required)"
-        rm -f "${ARCHIVE_FILE}.sha256"
+    # 计算本地 SHA256 哈希值
+    if command -v sha256sum >/dev/null 2>&1; then
+      LOCAL_HASH=$(sha256sum "$ARCHIVE_FILE" | awk '{print $1}')
+    elif command -v openssl >/dev/null 2>&1; then
+      LOCAL_HASH=$(openssl dgst -sha256 "$ARCHIVE_FILE" 2>/dev/null | awk '{print $NF}')
+      if [ -z "$LOCAL_HASH" ]; then
+        log_error "Failed to compute local SHA256 hash via openssl"
         exit 1
       fi
-
-      echo ""
-      echo "  Expected SHA256: ${EXPECTED_HASH}"
-      echo "  Local SHA256:    ${LOCAL_HASH}"
-      echo ""
-
-      if [ "$EXPECTED_HASH" = "$LOCAL_HASH" ]; then
-        log_ok "SHA256 checksum verification — passed"
-      else
-        log_error "SHA256 checksum verification — failed (file may be corrupted or tampered)"
-        log_error "Expected: ${EXPECTED_HASH}"
-        log_error "Got:      ${LOCAL_HASH}"
-        rm -f "${ARCHIVE_FILE}.sha256"
-        exit 1
-      fi
-
-      rm -f "${ARCHIVE_FILE}.sha256"
     else
-      log_warn "Failed to download SHA256 checksum file, skipping verification"
+      log_error "No SHA256 utility available (sha256sum or openssl required)"
+      exit 1
+    fi
+
+    echo ""
+    echo "  Expected SHA256: ${EXPECTED_HASH}"
+    echo "  Local SHA256:    ${LOCAL_HASH}"
+    echo ""
+
+    if [ "$EXPECTED_HASH" = "$LOCAL_HASH" ]; then
+      log_ok "SHA256 checksum verification — passed"
+    else
+      log_error "SHA256 checksum verification — failed (file may be corrupted or tampered)"
+      log_error "Expected: ${EXPECTED_HASH}"
+      log_error "Got:      ${LOCAL_HASH}"
+      exit 1
     fi
   fi
 fi
@@ -307,51 +309,56 @@ if [ "$KOMARI_ENABLED" = "true" ]; then
   if [ "$_api_code" != "200" ]; then
     log_warn "GitHub API returned HTTP ${_api_code}, unable to fetch checksum, skipping verification"
   else
-    _checksum_url=$(echo "$_api_body" | \
-      grep -o '"browser_download_url": "[^"]*'"${_komari_file}"'\.sha256"' | \
-      cut -d'"' -f4)
+    # 将 API 响应保存到临时文件（优化弱性能服务器）
+    _json_tmp="/tmp/komari_release_$$.json"
+    echo "$_api_body" > "$_json_tmp"
 
-    if [ -z "$_checksum_url" ]; then
-      log_warn "No SHA256 checksum asset found for komari-agent, skipping verification"
+    # 单次流式读取提取 SHA256（优化 I/O 效率）
+    EXPECTED_HASH=$(awk -v filename="${_komari_file}" '
+      $0 ~ "\"name\": \"" filename "\"" { found=1 }
+      found && $0 ~ "\"digest\": \"sha256:" {
+        match($0, /sha256:[^"]+/)
+        hash = substr($0, RSTART+7, RLENGTH-7)
+        print hash
+        exit
+      }
+    ' "$_json_tmp")
+
+    # 立即删除临时文件
+    rm -f "$_json_tmp" 2>/dev/null || true
+
+    if [ -z "$EXPECTED_HASH" ]; then
+      log_warn "No SHA256 digest found for ${_komari_file}, skipping verification"
     else
-      log_info "Downloading checksum file..."
-      if curl -sSL -o "${KOMARI_INSTALL_DIR}/agent.sha256" --connect-timeout 10 --max-time 15 "$_checksum_url"; then
-        read -r EXPECTED_HASH _ < "${KOMARI_INSTALL_DIR}/agent.sha256" || true
+      log_info "Extracted SHA256 digest from API response"
 
-        if command -v sha256sum >/dev/null 2>&1; then
-          LOCAL_HASH=$(sha256sum "${KOMARI_INSTALL_DIR}/agent" | awk '{print $1}')
-        elif command -v openssl >/dev/null 2>&1; then
-          LOCAL_HASH=$(openssl dgst -sha256 "${KOMARI_INSTALL_DIR}/agent" 2>/dev/null | awk '{print $NF}')
-          if [ -z "$LOCAL_HASH" ]; then
-            log_error "Failed to compute local SHA256 hash via openssl"
-            rm -f "${KOMARI_INSTALL_DIR}/agent.sha256"
-            exit 1
-          fi
-        else
-          log_warn "No SHA256 utility available, skipping verification"
-          rm -f "${KOMARI_INSTALL_DIR}/agent.sha256"
+      # 计算本地 SHA256 哈希值
+      if command -v sha256sum >/dev/null 2>&1; then
+        LOCAL_HASH=$(sha256sum "${KOMARI_INSTALL_DIR}/agent" | awk '{print $1}')
+      elif command -v openssl >/dev/null 2>&1; then
+        LOCAL_HASH=$(openssl dgst -sha256 "${KOMARI_INSTALL_DIR}/agent" 2>/dev/null | awk '{print $NF}')
+        if [ -z "$LOCAL_HASH" ]; then
+          log_error "Failed to compute local SHA256 hash via openssl"
+          exit 1
         fi
-
-        if [ -n "$LOCAL_HASH" ]; then
-          echo ""
-          echo "  Expected SHA256: ${EXPECTED_HASH}"
-          echo "  Local SHA256:    ${LOCAL_HASH}"
-          echo ""
-
-          if [ "$EXPECTED_HASH" = "$LOCAL_HASH" ]; then
-            log_ok "SHA256 checksum verification — passed"
-          else
-            log_error "SHA256 checksum verification — failed (file may be corrupted or tampered)"
-            log_error "Expected: ${EXPECTED_HASH}"
-            log_error "Got:      ${LOCAL_HASH}"
-            rm -f "${KOMARI_INSTALL_DIR}/agent.sha256"
-            exit 1
-          fi
-        fi
-
-        rm -f "${KOMARI_INSTALL_DIR}/agent.sha256"
       else
-        log_warn "Failed to download SHA256 checksum file, skipping verification"
+        log_warn "No SHA256 utility available, skipping verification"
+      fi
+
+      if [ -n "$LOCAL_HASH" ]; then
+        echo ""
+        echo "  Expected SHA256: ${EXPECTED_HASH}"
+        echo "  Local SHA256:    ${LOCAL_HASH}"
+        echo ""
+
+        if [ "$EXPECTED_HASH" = "$LOCAL_HASH" ]; then
+          log_ok "SHA256 checksum verification — passed"
+        else
+          log_error "SHA256 checksum verification — failed (file may be corrupted or tampered)"
+          log_error "Expected: ${EXPECTED_HASH}"
+          log_error "Got:      ${LOCAL_HASH}"
+          exit 1
+        fi
       fi
     fi
   fi
