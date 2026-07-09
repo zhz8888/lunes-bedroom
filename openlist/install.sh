@@ -155,7 +155,8 @@ fi
 log_info "Download URL: ${DOWNLOAD_URL}"
 
 run_cmd "Download OpenList archive" \
-  curl -sSL -o openlist-linux-amd64.tar.gz "$DOWNLOAD_URL"
+  curl -sSL --connect-timeout 10 --max-time 60 \
+    -o openlist-linux-amd64.tar.gz "$DOWNLOAD_URL"
 
 if [ ! -f openlist-linux-amd64.tar.gz ]; then
   log_error "File download failed: openlist-linux-amd64.tar.gz"

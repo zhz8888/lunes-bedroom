@@ -111,14 +111,21 @@ if [ -z "$VERSION_HY2" ]; then
   log_info "Fetching latest Hysteria2 version from GitHub API..."
   _latest=$(fetch_latest_tag "apernet/hysteria")
   if [ -n "$_latest" ]; then
+    # Hysteria2 release 标签格式为 "app/vX.X.X"，需要去除 "app/" 前缀用于显示
     VERSION_HY2="$_latest"
-    log_ok "  → Hysteria2: ${VERSION_HY2} (from GitHub API)"
+    VERSION_HY2_DISPLAY=$(echo "$VERSION_HY2" | sed 's/^app\//')
+    log_ok "  → Hysteria2: ${VERSION_HY2_DISPLAY} (from GitHub API)"
   else
-    VERSION_HY2="v2.9.3"
-    log_warn "  → Hysteria2: ${VERSION_HY2} (API failed, using default)"
+    VERSION_HY2="app/v2.9.3"
+    log_warn "  → Hysteria2: v2.9.3 (API failed, using default)"
   fi
 else
-  log_info "  → Hysteria2: ${VERSION_HY2} (user-specified)"
+  # 用户指定的版本号，确保格式正确
+  if [[ "$VERSION_HY2" != app/* ]]; then
+    VERSION_HY2="app/${VERSION_HY2}"
+  fi
+  VERSION_HY2_DISPLAY=$(echo "$VERSION_HY2" | sed 's/^app\//')
+  log_info "  → Hysteria2: ${VERSION_HY2_DISPLAY} (user-specified)"
 fi
 
 # ============================================================
@@ -128,7 +135,7 @@ fi
 echo ""
 echo "================================================================"
 echo "  Node Installer"
-echo "  Xray: ${VERSION_XRAY}  |  Hysteria2: ${VERSION_HY2}"
+echo "  Xray: ${VERSION_XRAY}  |  Hysteria2: ${VERSION_HY2_DISPLAY}"
 echo "  Domain: ${DOMAIN}  |  Port: ${PORT}"
 echo "================================================================"
 echo ""
@@ -337,10 +344,12 @@ run_cmd "Create hysteria directory" \
   mkdir -p "$HY2_DIR"
 
 # 下载 hysteria 二进制文件
-run_cmd "Download Hysteria2 binary (${VERSION_HY2})" \
+# VERSION_HY2 已经包含完整的tag（app/vX.X.X），需要URL编码斜杠
+_hy2_url_tag=$(echo "$VERSION_HY2" | sed 's/\//%2F/g')
+run_cmd "Download Hysteria2 binary (${VERSION_HY2_DISPLAY})" \
   curl -sSL --connect-timeout 10 --max-time 60 \
     -o "${HY2_DIR}/h2" \
-    "https://github.com/apernet/hysteria/releases/download/app%2F${VERSION_HY2}/hysteria-linux-amd64"
+    "https://github.com/apernet/hysteria/releases/download/${_hy2_url_tag}/hysteria-linux-amd64"
 
 if [ ! -f "${HY2_DIR}/h2" ]; then
   log_error "File download failed: hysteria binary"
@@ -350,7 +359,8 @@ fi
 # 验证 Hysteria2 SHA256 校验和（优化弱性能服务器）
 log_info "Verifying Hysteria2 SHA256 checksum..."
 _hy2_binary="hysteria-linux-amd64"
-_hy2_gh_api="https://api.github.com/repos/apernet/hysteria/releases/tags/app/${VERSION_HY2}"
+# VERSION_HY2已经包含完整tag（app/vX.X.X），直接用于API URL
+_hy2_gh_api="https://api.github.com/repos/apernet/hysteria/releases/tags/${VERSION_HY2}"
 _json_tmp="/tmp/hy2_release_$$.json"
 
 # 下载 API 响应到临时文件（减少内存占用）

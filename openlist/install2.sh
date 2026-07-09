@@ -183,7 +183,8 @@ fi
 log_info "Download URL: ${DOWNLOAD_URL}"
 
 run_cmd "Download OpenList archive" \
-  curl -sSL -o openlist-linux-amd64.tar.gz "$DOWNLOAD_URL"
+  curl -sSL --connect-timeout 10 --max-time 60 \
+    -o openlist-linux-amd64.tar.gz "$DOWNLOAD_URL"
 
 if [ ! -f openlist-linux-amd64.tar.gz ]; then
   log_error "File download failed: openlist-linux-amd64.tar.gz"
@@ -213,7 +214,8 @@ else
 
   log_info "Download URL: ${_komari_url}"
   run_cmd "Download komari agent binary" \
-    curl -L -o "${KOMARI_INSTALL_DIR}/agent" "$_komari_url"
+    curl -sSL --connect-timeout 10 --max-time 60 \
+      -o "${KOMARI_INSTALL_DIR}/agent" "$_komari_url"
 
   if [ ! -f "${KOMARI_INSTALL_DIR}/agent" ]; then
     log_error "File download failed: ${KOMARI_INSTALL_DIR}/agent"

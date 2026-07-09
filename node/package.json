@@ -1,6 +1,6 @@
 {
   "name": "lunes-bedroom-node",
-  "version": "1.2.0",
+  "version": "1.2.5",
   "description": "Xray & Hysteria2 Startup Script for Lunes Host LLC",
   "main": "app.js",
   "scripts": {
