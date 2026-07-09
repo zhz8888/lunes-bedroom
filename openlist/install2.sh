@@ -290,6 +290,7 @@ fi
 #
 # 此部分添加 komari-agent 的安装与启动支持。
 # 安装路径固定为 /home/container/komari，通过 app.js 启动。
+# -e 参数用于链接 komari 服务器地址，-t 参数用于认证令牌。
 # 仅支持 Linux amd64 架构。
 # ============================================================
 
@@ -298,33 +299,27 @@ fi
 # ──────────────────────────────────────────
 log_step "Setup Komari Agent"
 
-# ---------- 加载配置 ----------
-_KOMARI_ENV_FILE="${KOMARI_ENV_FILE:-./komari-agent-env}"
-if [ -f "$_KOMARI_ENV_FILE" ]; then
-  log_info "Loading komari agent configuration from ${_KOMARI_ENV_FILE}"
-  . "$_KOMARI_ENV_FILE"
-else
-  log_info "No komari-agent-env file found, using defaults / environment variables"
-fi
-
-# ---------- 默认配置 ----------
+# ---------- 配置参数 ----------
 KOMARI_ENABLED="${KOMARI_ENABLED:-true}"
 KOMARI_INSTALL_DIR="/home/container/komari"
 KOMARI_VERSION="${KOMARI_VERSION:-}"
-KOMARI_ARGS="${KOMARI_ARGS:-}"
-KOMARI_LOG_LEVEL="${KOMARI_LOG_LEVEL:-info}"
+KOMARI_SERVER="${KOMARI_SERVER:-http://localhost:9182}"
+KOMARI_TOKEN="${KOMARI_TOKEN:-default}"
 
-# 如果未设置 --log-level 则添加
-case " $KOMARI_ARGS " in
-  *"--log-level"*) ;;  # 已指定
-  *) KOMARI_ARGS="$KOMARI_ARGS --log-level $KOMARI_LOG_LEVEL" ;;
-esac
+# 构建启动参数（如果用户未自定义 KOMARI_ARGS 则使用默认值）
+if [ -z "$KOMARI_ARGS" ]; then
+  KOMARI_ARGS="-e ${KOMARI_SERVER} -t ${KOMARI_TOKEN}"
+fi
 
 # ---------- 检查是否启用 ----------
 if [ "$KOMARI_ENABLED" != "true" ]; then
   log_info "Komari agent is disabled (KOMARI_ENABLED != 'true'), skipping installation"
 else
   log_info "Starting komari agent installation..."
+
+  # ---------- 创建安装目录 ----------
+  run_cmd "Create komari agent directory: ${KOMARI_INSTALL_DIR}" \
+    mkdir -p "$KOMARI_INSTALL_DIR"
 
   # ---------- 构建下载地址（仅 Linux amd64）----------
   _file_name="komari-agent-linux-amd64"
@@ -339,18 +334,12 @@ else
 
   _download_url="https://github.com/komari-monitor/komari-agent/releases/${_download_path}/${_file_name}"
 
-  # ---------- 创建安装目录 ----------
-  run_cmd "Create komari agent directory: ${KOMARI_INSTALL_DIR}" \
-    mkdir -p "$KOMARI_INSTALL_DIR"
-
-  _komari_agent_path="${KOMARI_INSTALL_DIR}/agent"
-
   # ---------- 下载二进制文件 ----------
   log_info "Downloading ${_file_name} (${_version_label})..."
   log_info "URL: ${_download_url}"
 
-  if curl -L -o "$_komari_agent_path" "$_download_url" 2>&1; then
-    _download_size=$(wc -c < "$_komari_agent_path" 2>/dev/null | tr -d ' ')
+  if curl -L -o "${KOMARI_INSTALL_DIR}/agent" "$_download_url" 2>&1; then
+    _download_size=$(wc -c < "${KOMARI_INSTALL_DIR}/agent" 2>/dev/null | tr -d ' ')
     log_ok "Komari agent binary downloaded (${_download_size} bytes)"
   else
     log_error "Failed to download komari agent binary"
@@ -360,12 +349,22 @@ else
 
   # ---------- 设置可执行权限 ----------
   run_cmd "Set komari agent executable permission" \
-    chmod +x "$_komari_agent_path"
+    chmod +x "${KOMARI_INSTALL_DIR}/agent"
 
-  log_ok "Komari agent installed to ${_komari_agent_path}"
+  log_ok "Komari agent installed to ${KOMARI_INSTALL_DIR}/agent"
 
   # ---------- 将 komari-agent 添加到 app.js 启动 ----------
   log_info "Adding komari-agent to app.js startup..."
+
+  # 将 KOMARI_ARGS 字符串拆分为 JS 数组元素
+  _args_str=""
+  for _arg in $KOMARI_ARGS; do
+    if [ -z "$_args_str" ]; then
+      _args_str="\"${_arg}\""
+    else
+      _args_str="${_args_str}, \"${_arg}\""
+    fi
+  done
 
   # 移除 apps 数组的闭合标记 ];，然后追加 agent 条目
   sed -i '/^];$/d' app.js
@@ -373,19 +372,19 @@ else
   {
     echo '  {'
     echo '    name: "komari-agent",'
-    echo "    binaryPath: \"${_komari_agent_path}\","
-    echo '    args: []'
+    echo "    binaryPath: \"${KOMARI_INSTALL_DIR}/agent\","
+    echo "    args: [${_args_str}]"
     echo '  }'
     echo '];'
   } >> app.js
 
-  log_ok "Komari-agent added to app.js startup"
+  log_ok "Komari-agent added to app.js startup (server: ${KOMARI_SERVER})"
 
   # ---------- 验证安装 ----------
   log_info "Verifying komari agent installation..."
-  if [ -f "$_komari_agent_path" ]; then
-    _size=$(wc -c < "$_komari_agent_path" 2>/dev/null | tr -d ' ')
-    log_ok "Komari agent binary — ${_komari_agent_path} (${_size} bytes)"
+  if [ -f "${KOMARI_INSTALL_DIR}/agent" ]; then
+    _size=$(wc -c < "${KOMARI_INSTALL_DIR}/agent" 2>/dev/null | tr -d ' ')
+    log_ok "Komari agent binary — ${KOMARI_INSTALL_DIR}/agent (${_size} bytes)"
   else
     log_error "Komari agent binary not found after installation"
     exit 1
