@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 
 # ============================================================
-# Node Installer — Xray + Hysteria2 One-click Node Setup
+# Node Installer — Xray + Hysteria2 + Komari Agent
 # ============================================================
 
 # ---------- Configuration ----------
@@ -322,6 +322,116 @@ else
 fi
 
 # ============================================================
+# Komari Agent Integration
+# ============================================================
+#
+# 此部分添加 komari-agent 的安装与启动支持。
+# 安装路径固定为 /home/container/komari，通过 app.js 启动。
+# 仅支持 Linux amd64 架构。
+# ============================================================
+
+# ──────────────────────────────────────────
+# Step 6: Setup Komari Agent
+# ──────────────────────────────────────────
+log_step "Setup Komari Agent"
+
+# ---------- Load Configuration ----------
+_KOMARI_ENV_FILE="${KOMARI_ENV_FILE:-./komari-agent-env}"
+if [ -f "$_KOMARI_ENV_FILE" ]; then
+  log_info "Loading komari agent configuration from ${_KOMARI_ENV_FILE}"
+  . "$_KOMARI_ENV_FILE"
+else
+  log_info "No komari-agent-env file found, using defaults / environment variables"
+fi
+
+# ---------- Configuration with Defaults ----------
+KOMARI_ENABLED="${KOMARI_ENABLED:-true}"
+KOMARI_INSTALL_DIR="/home/container/komari"
+KOMARI_VERSION="${KOMARI_VERSION:-}"
+KOMARI_ARGS="${KOMARI_ARGS:-}"
+KOMARI_LOG_LEVEL="${KOMARI_LOG_LEVEL:-info}"
+
+# Add --log-level to args if not already set
+case " $KOMARI_ARGS " in
+  *"--log-level"*) ;;  # already specified
+  *) KOMARI_ARGS="$KOMARI_ARGS --log-level $KOMARI_LOG_LEVEL" ;;
+esac
+
+# ---------- Check if enabled ----------
+if [ "$KOMARI_ENABLED" != "true" ]; then
+  log_info "Komari agent is disabled (KOMARI_ENABLED != 'true'), skipping installation"
+else
+  log_info "Starting komari agent installation..."
+
+  # ---------- Construct Download URL (linux amd64 only) ----------
+  _file_name="komari-agent-linux-amd64"
+
+  if [ -z "$KOMARI_VERSION" ]; then
+    _download_path="latest/download"
+    _version_label="latest"
+  else
+    _download_path="download/${KOMARI_VERSION}"
+    _version_label="${KOMARI_VERSION}"
+  fi
+
+  _download_url="https://github.com/komari-monitor/komari-agent/releases/${_download_path}/${_file_name}"
+
+  # ---------- Create Installation Directory ----------
+  run_cmd "Create komari agent directory: ${KOMARI_INSTALL_DIR}" \
+    mkdir -p "$KOMARI_INSTALL_DIR"
+
+  _komari_agent_path="${KOMARI_INSTALL_DIR}/agent"
+
+  # ---------- Download Binary ----------
+  log_info "Downloading ${_file_name} (${_version_label})..."
+  log_info "URL: ${_download_url}"
+
+  if curl -L -o "$_komari_agent_path" "$_download_url" 2>&1; then
+    _download_size=$(wc -c < "$_komari_agent_path" 2>/dev/null | tr -d ' ')
+    log_ok "Komari agent binary downloaded (${_download_size} bytes)"
+  else
+    log_error "Failed to download komari agent binary"
+    log_error "URL: ${_download_url}"
+    exit 1
+  fi
+
+  # ---------- Set Executable Permission ----------
+  run_cmd "Set komari agent executable permission" \
+    chmod +x "$_komari_agent_path"
+
+  log_ok "Komari agent installed to ${_komari_agent_path}"
+
+  # ---------- Add komari-agent to app.js startup ----------
+  log_info "Adding komari-agent to app.js startup..."
+
+  # Remove the closing ]; of the apps array, then append agent entry
+  sed -i '/^];$/d' app.js
+  sed -i '$s/$/,/' app.js
+  {
+    echo '  {'
+    echo '    name: "komari-agent",'
+    echo "    binaryPath: \"${_komari_agent_path}\","
+    echo '    args: []'
+    echo '  }'
+    echo '];'
+  } >> app.js
+
+  log_ok "Komari-agent added to app.js startup"
+
+  # ---------- Verify Installation ----------
+  log_info "Verifying komari agent installation..."
+  if [ -f "$_komari_agent_path" ]; then
+    _size=$(wc -c < "$_komari_agent_path" 2>/dev/null | tr -d ' ')
+    log_ok "Komari agent binary — ${_komari_agent_path} (${_size} bytes)"
+  else
+    log_error "Komari agent binary not found after installation"
+    exit 1
+  fi
+
+  log_ok "Komari agent installation completed successfully"
+fi
+
+# ============================================================
 # Installation Summary
 # ============================================================
 echo ""
@@ -338,6 +448,17 @@ echo "    • UUID:            ${UUID}"
 echo "    • Xray Version:    ${VERSION_XRAY}"
 echo "    • Hysteria2:       ${VERSION_HY2}"
 echo ""
+
+echo "  Komari Agent:"
+if [ "$KOMARI_ENABLED" = "true" ]; then
+  echo "    • Status:          ${_C_OK}Installed${_C_RESET}"
+  echo "    • Binary:          ${_komari_agent_path}"
+  echo "    • Startup:         ${_C_OK}Integrated in app.js${_C_RESET}"
+else
+  echo "    • Status:          Skipped (disabled by config)"
+fi
+echo ""
+
 echo "  Execution Summary:"
 echo "    • Success:         ${_SUCCESS}"
 echo "    • Warnings:        ${_WARN}"
@@ -368,5 +489,6 @@ echo ""
 echo "  ${_C_BOLD}Next Steps:${_C_RESET}"
 echo "  1. Verify the connection info in ${NODE_INFO_FILE}"
 echo "  2. Configure your client with the VLESS or Hysteria2 URL"
+echo "  3. Start the project:  node app.js  (komari-agent starts automatically)"
 echo ""
 echo "${_C_BOLD}================================================================${_C_RESET}"

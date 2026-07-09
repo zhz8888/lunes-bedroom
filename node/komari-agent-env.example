@@ -1,0 +1,34 @@
+# ============================================================
+# Komari Agent 环境变量配置文件
+# ============================================================
+# 此文件由 install2.sh 自动加载，用于配置 komari-agent 安装参数。
+# 请将此文件复制为 komari-agent-env 并根据实际环境修改配置。
+#
+# 使用方式:
+#   cp komari-agent-env.example komari-agent-env
+#   然后编辑 komari-agent-env 修改配置项
+#
+# 注意: 安装路径固定为 /home/container/komari，仅支持 Linux amd64 架构。
+# ============================================================
+
+# 是否启用 komari agent 安装与启动
+# 设置为 false 可跳过 agent 安装，仅执行原始项目安装
+# 默认值: true
+# KOMARI_ENABLED=true
+
+# 指定 komari-agent 版本
+# 留空表示安装最新版本
+# 例如: v0.1.0
+# 默认值: (latest)
+# KOMARI_VERSION=
+
+# komari-agent 附加启动参数
+# 这些参数将传递给 agent 二进制文件
+# 例如: --port 9182
+# 默认值: (空)
+# KOMARI_ARGS=
+
+# komari-agent 日志级别
+# 可选值: debug, info, warn, error
+# 默认值: info
+# KOMARI_LOG_LEVEL=info
