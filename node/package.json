@@ -1,0 +1,11 @@
+{
+  "name": "lunes-bedroom-node",
+  "version": "1.1.0",
+  "description": "Xray & Hysteria2 Startup Script for Lunes Host LLC",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "author": "vevc & zhz8888",
+  "license": "MIT"
+}
