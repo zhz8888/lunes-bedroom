@@ -9,8 +9,8 @@ DOMAIN="${DOMAIN:-node68.lunes.host}"
 PORT="${PORT:-10008}"
 UUID="${UUID:-2584b733-9095-4bec-a7d5-62b473540f7a}"
 HY2_PASSWORD="${HY2_PASSWORD:-vevc.HY2.Password}"
-VERSION_XRAY="${VERSION_XRAY:-v26.3.27}"
-VERSION_HY2="${VERSION_HY2:-v2.9.3}"
+VERSION_XRAY="${VERSION_XRAY:-}"
+VERSION_HY2="${VERSION_HY2:-}"
 
 # ---------- 路径 ----------
 XRAY_DIR="/home/container/xy"
@@ -91,6 +91,55 @@ run_cmd() {
     return $_code
   fi
 }
+
+# ============================================================
+# 版本解析 — 通过 GitHub API 获取最新版本号
+# ============================================================
+
+# 从 GitHub API 获取最新 release 版本号
+# 成功时输出 tag_name，失败时输出空字符串
+fetch_latest_tag() {
+  repo="$1"
+  _api_resp=$(curl -sSL --connect-timeout 10 --max-time 15 \
+    -w "\n%{http_code}" "https://api.github.com/repos/${repo}/releases/latest" 2>&1) || true
+  _api_code=$(echo "$_api_resp" | sed -n '$p')
+  _api_body=$(echo "$_api_resp" | sed '$d')
+  if [ "$_api_code" = "200" ]; then
+    echo "$_api_body" | grep -o '"tag_name": "[^"]*"' | cut -d'"' -f4
+  else
+    echo ""
+  fi
+}
+
+# 解析 Xray 版本
+if [ -z "$VERSION_XRAY" ]; then
+  log_info "Fetching latest Xray-core version from GitHub API..."
+  _latest=$(fetch_latest_tag "XTLS/Xray-core")
+  if [ -n "$_latest" ]; then
+    VERSION_XRAY="$_latest"
+    log_ok "  → Xray-core: ${VERSION_XRAY} (from GitHub API)"
+  else
+    VERSION_XRAY="v26.3.27"
+    log_warn "  → Xray-core: ${VERSION_XRAY} (API failed, using default)"
+  fi
+else
+  log_info "  → Xray-core: ${VERSION_XRAY} (user-specified)"
+fi
+
+# 解析 Hysteria2 版本
+if [ -z "$VERSION_HY2" ]; then
+  log_info "Fetching latest Hysteria2 version from GitHub API..."
+  _latest=$(fetch_latest_tag "apernet/hysteria")
+  if [ -n "$_latest" ]; then
+    VERSION_HY2="$_latest"
+    log_ok "  → Hysteria2: ${VERSION_HY2} (from GitHub API)"
+  else
+    VERSION_HY2="v2.9.3"
+    log_warn "  → Hysteria2: ${VERSION_HY2} (API failed, using default)"
+  fi
+else
+  log_info "  → Hysteria2: ${VERSION_HY2} (user-specified)"
+fi
 
 # ============================================================
 # 开始安装

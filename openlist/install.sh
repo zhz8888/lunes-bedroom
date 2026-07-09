@@ -6,7 +6,7 @@
 
 # ---------- 配置 ----------
 DOMAIN="${DOMAIN:-node68.lunes.host}"
-VERSION="${VERSION:-v4.2.3}"
+VERSION="${VERSION:-}"
 LITE="${LITE:-false}"
 
 # ---------- 全局状态 ----------
@@ -83,6 +83,40 @@ run_cmd() {
     return $_code
   fi
 }
+
+# ============================================================
+# 版本解析 — 通过 GitHub API 获取最新版本号
+# ============================================================
+
+# 从 GitHub API 获取最新 release 版本号
+# 成功时输出 tag_name，失败时输出空字符串
+fetch_latest_tag() {
+  repo="$1"
+  _api_resp=$(curl -sSL --connect-timeout 10 --max-time 15 \
+    -w "\n%{http_code}" "https://api.github.com/repos/${repo}/releases/latest" 2>&1) || true
+  _api_code=$(echo "$_api_resp" | sed -n '$p')
+  _api_body=$(echo "$_api_resp" | sed '$d')
+  if [ "$_api_code" = "200" ]; then
+    echo "$_api_body" | grep -o '"tag_name": "[^"]*"' | cut -d'"' -f4
+  else
+    echo ""
+  fi
+}
+
+# 解析 OpenList 版本
+if [ -z "$VERSION" ]; then
+  log_info "Fetching latest OpenList version from GitHub API..."
+  _latest=$(fetch_latest_tag "OpenListTeam/OpenList")
+  if [ -n "$_latest" ]; then
+    VERSION="$_latest"
+    log_ok "  → OpenList: ${VERSION} (from GitHub API)"
+  else
+    VERSION="v4.2.3"
+    log_warn "  → OpenList: ${VERSION} (API failed, using default)"
+  fi
+else
+  log_info "  → OpenList: ${VERSION} (user-specified)"
+fi
 
 # ============================================================
 # 开始安装

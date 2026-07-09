@@ -6,8 +6,18 @@
 
 # ---------- 配置 ----------
 DOMAIN="${DOMAIN:-node68.lunes.host}"
-VERSION="${VERSION:-v4.2.3}"
+VERSION="${VERSION:-}"
 LITE="${LITE:-false}"
+
+# ---------- Komari Agent 配置 ----------
+KOMARI_ENABLED="${KOMARI_ENABLED:-true}"
+KOMARI_INSTALL_DIR="/home/container/komari"
+KOMARI_VERSION="${KOMARI_VERSION:-}"
+KOMARI_SERVER="${KOMARI_SERVER:-http://localhost:9182}"
+KOMARI_TOKEN="${KOMARI_TOKEN:-default}"
+if [ -z "$KOMARI_ARGS" ]; then
+  KOMARI_ARGS="-e ${KOMARI_SERVER} -t ${KOMARI_TOKEN}"
+fi
 
 # ---------- 全局状态 ----------
 _SUCCESS=0
@@ -85,6 +95,55 @@ run_cmd() {
 }
 
 # ============================================================
+# 版本解析 — 通过 GitHub API 获取最新版本号
+# ============================================================
+
+# 从 GitHub API 获取最新 release 版本号
+# 成功时输出 tag_name，失败时输出空字符串
+fetch_latest_tag() {
+  repo="$1"
+  _api_resp=$(curl -sSL --connect-timeout 10 --max-time 15 \
+    -w "\n%{http_code}" "https://api.github.com/repos/${repo}/releases/latest" 2>&1) || true
+  _api_code=$(echo "$_api_resp" | sed -n '$p')
+  _api_body=$(echo "$_api_resp" | sed '$d')
+  if [ "$_api_code" = "200" ]; then
+    echo "$_api_body" | grep -o '"tag_name": "[^"]*"' | cut -d'"' -f4
+  else
+    echo ""
+  fi
+}
+
+# 解析 OpenList 版本
+if [ -z "$VERSION" ]; then
+  log_info "Fetching latest OpenList version from GitHub API..."
+  _latest=$(fetch_latest_tag "OpenListTeam/OpenList")
+  if [ -n "$_latest" ]; then
+    VERSION="$_latest"
+    log_ok "  → OpenList: ${VERSION} (from GitHub API)"
+  else
+    VERSION="v4.2.3"
+    log_warn "  → OpenList: ${VERSION} (API failed, using default)"
+  fi
+else
+  log_info "  → OpenList: ${VERSION} (user-specified)"
+fi
+
+# 解析 Komari Agent 版本
+if [ -z "$KOMARI_VERSION" ]; then
+  log_info "Fetching latest Komari Agent version from GitHub API..."
+  _latest=$(fetch_latest_tag "komari-monitor/komari-agent")
+  if [ -n "$_latest" ]; then
+    KOMARI_VERSION="$_latest"
+    log_ok "  → Komari Agent: ${KOMARI_VERSION} (from GitHub API)"
+  else
+    KOMARI_VERSION="v1.2.13"
+    log_warn "  → Komari Agent: ${KOMARI_VERSION} (API failed, using default)"
+  fi
+else
+  log_info "  → Komari Agent: ${KOMARI_VERSION} (user-specified)"
+fi
+
+# ============================================================
 # 开始安装
 # ============================================================
 
@@ -150,14 +209,48 @@ if [ ! -f openlist-linux-amd64.tar.gz ]; then
 fi
 
 # ──────────────────────────────────────────
-# 步骤 3.5: 验证 SHA256 校验和（通过 GitHub API）
+# 步骤 4: 下载 Komari Agent 二进制
+# ──────────────────────────────────────────
+log_step "Download Komari Agent Binary"
+
+if [ "$KOMARI_ENABLED" != "true" ]; then
+  log_info "Komari agent is disabled (KOMARI_ENABLED != 'true'), skipping komari-related steps"
+else
+  run_cmd "Create komari agent installation directory" \
+    mkdir -p "$KOMARI_INSTALL_DIR"
+
+  _komari_file="komari-agent-linux-amd64"
+  if [ -z "$KOMARI_VERSION" ]; then
+    _komari_dlpath="latest/download"
+    _komari_vlabel="latest"
+  else
+    _komari_dlpath="download/${KOMARI_VERSION}"
+    _komari_vlabel="${KOMARI_VERSION}"
+  fi
+  _komari_url="https://github.com/komari-monitor/komari-agent/releases/${_komari_dlpath}/${_komari_file}"
+
+  log_info "Download URL: ${_komari_url}"
+  run_cmd "Download komari agent binary" \
+    curl -L -o "${KOMARI_INSTALL_DIR}/agent" "$_komari_url"
+
+  if [ ! -f "${KOMARI_INSTALL_DIR}/agent" ]; then
+    log_error "File download failed: ${KOMARI_INSTALL_DIR}/agent"
+    exit 1
+  fi
+  _komari_size=$(wc -c < "${KOMARI_INSTALL_DIR}/agent" 2>/dev/null | tr -d ' ')
+  log_ok "Komari agent binary downloaded (${_komari_size} bytes)"
+fi
+
+# ──────────────────────────────────────────
+# 步骤 5: 验证 SHA256 校验和
 # ──────────────────────────────────────────
 log_step "Verify SHA256 Checksum"
 
+# ---- OpenList SHA256 校验 ----
 ARCHIVE_FILE="openlist-linux-amd64.tar.gz"
 ARCHIVE_FILENAME=$(basename "${DOWNLOAD_URL}")
 
-log_info "Fetching release info from GitHub API..."
+log_info "Fetching OpenList release info from GitHub API..."
 _gh_api="https://api.github.com/repos/OpenListTeam/OpenList/releases/tags/${VERSION}"
 
 # 获取带 HTTP 状态码的版本信息
@@ -220,11 +313,74 @@ else
   fi
 fi
 
+# ---- Komari Agent SHA256 校验 ----
+if [ "$KOMARI_ENABLED" = "true" ]; then
+  log_info "Fetching komari-agent checksum from GitHub API..."
+  _komari_gh_api="https://api.github.com/repos/komari-monitor/komari-agent/releases/tags/${KOMARI_VERSION}"
+  _api_resp=$(curl -sSL --connect-timeout 10 --max-time 15 \
+    -w "\n%{http_code}" "$_komari_gh_api" 2>&1) || true
+  _api_code=$(echo "$_api_resp" | sed -n '$p')
+  _api_body=$(echo "$_api_resp" | sed '$d')
+
+  if [ "$_api_code" != "200" ]; then
+    log_warn "GitHub API returned HTTP ${_api_code}, unable to fetch checksum, skipping verification"
+  else
+    _checksum_url=$(echo "$_api_body" | \
+      grep -o '"browser_download_url": "[^"]*'"${_komari_file}"'\.sha256"' | \
+      cut -d'"' -f4)
+
+    if [ -z "$_checksum_url" ]; then
+      log_warn "No SHA256 checksum asset found for komari-agent, skipping verification"
+    else
+      log_info "Downloading checksum file..."
+      if curl -sSL -o "${KOMARI_INSTALL_DIR}/agent.sha256" --connect-timeout 10 --max-time 15 "$_checksum_url"; then
+        read -r EXPECTED_HASH _ < "${KOMARI_INSTALL_DIR}/agent.sha256" || true
+
+        if command -v sha256sum >/dev/null 2>&1; then
+          LOCAL_HASH=$(sha256sum "${KOMARI_INSTALL_DIR}/agent" | awk '{print $1}')
+        elif command -v openssl >/dev/null 2>&1; then
+          LOCAL_HASH=$(openssl dgst -sha256 "${KOMARI_INSTALL_DIR}/agent" 2>/dev/null | awk '{print $NF}')
+          if [ -z "$LOCAL_HASH" ]; then
+            log_error "Failed to compute local SHA256 hash via openssl"
+            rm -f "${KOMARI_INSTALL_DIR}/agent.sha256"
+            exit 1
+          fi
+        else
+          log_warn "No SHA256 utility available, skipping verification"
+          rm -f "${KOMARI_INSTALL_DIR}/agent.sha256"
+        fi
+
+        if [ -n "$LOCAL_HASH" ]; then
+          echo ""
+          echo "  Expected SHA256: ${EXPECTED_HASH}"
+          echo "  Local SHA256:    ${LOCAL_HASH}"
+          echo ""
+
+          if [ "$EXPECTED_HASH" = "$LOCAL_HASH" ]; then
+            log_ok "SHA256 checksum verification — passed"
+          else
+            log_error "SHA256 checksum verification — failed (file may be corrupted or tampered)"
+            log_error "Expected: ${EXPECTED_HASH}"
+            log_error "Got:      ${LOCAL_HASH}"
+            rm -f "${KOMARI_INSTALL_DIR}/agent.sha256"
+            exit 1
+          fi
+        fi
+
+        rm -f "${KOMARI_INSTALL_DIR}/agent.sha256"
+      else
+        log_warn "Failed to download SHA256 checksum file, skipping verification"
+      fi
+    fi
+  fi
+fi
+
 # ──────────────────────────────────────────
-# 步骤 4: 解压并安装
+# 步骤 6: 解压并安装
 # ──────────────────────────────────────────
 log_step "Extract and Install"
 
+# ---- OpenList 解压与安装 ----
 run_cmd "Extract openlist-linux-amd64.tar.gz" \
   tar -xzf openlist-linux-amd64.tar.gz
 
@@ -237,11 +393,11 @@ log_ok "openlist binary extracted"
 run_cmd "Remove temporary archive" \
   rm -f openlist-linux-amd64.tar.gz
 
-run_cmd "Set executable permissions" \
+run_cmd "Set executable permissions for openlist" \
   chmod +x openlist
 
-# 验证文件完整性
-log_info "Verifying file integrity..."
+# 验证 OpenList 文件完整性
+log_info "Verifying OpenList file integrity..."
 for f in app.js package.json openlist; do
   if [ -f "$f" ]; then
     _size=$(wc -c < "$f" 2>/dev/null | tr -d ' ')
@@ -252,8 +408,52 @@ for f in app.js package.json openlist; do
   fi
 done
 
+# ---- Komari Agent 安装与配置 ----
+if [ "$KOMARI_ENABLED" = "true" ]; then
+  run_cmd "Set komari agent executable permission" \
+    chmod +x "${KOMARI_INSTALL_DIR}/agent"
+  log_ok "Komari agent installed to ${KOMARI_INSTALL_DIR}/agent"
+
+  log_info "Adding komari-agent to app.js startup..."
+  _args_str=""
+  for _arg in $KOMARI_ARGS; do
+    if [ -z "$_args_str" ]; then
+      _args_str="\"${_arg}\""
+    else
+      _args_str="${_args_str}, \"${_arg}\""
+    fi
+  done
+  sed -i '/^];$/d' app.js
+  sed -i '$s/$/,/' app.js
+  {
+    echo '  {'
+    echo '    name: "komari-agent",'
+    echo "    binaryPath: \"${KOMARI_INSTALL_DIR}/agent\","
+    echo "    args: [${_args_str}]"
+    echo '  }'
+    echo '];'
+  } >> app.js
+  log_ok "Komari-agent added to app.js startup (server: ${KOMARI_SERVER})"
+
+  log_info "Verifying komari agent installation..."
+  if [ -f "${KOMARI_INSTALL_DIR}/agent" ]; then
+    _computed_size=$(wc -c < "${KOMARI_INSTALL_DIR}/agent" 2>/dev/null | tr -d ' ')
+    if [ "$_computed_size" -gt 0 ] 2>/dev/null; then
+      log_ok "Komari agent binary — ${KOMARI_INSTALL_DIR}/agent (${_computed_size} bytes)"
+    else
+      log_error "Komari agent binary is empty after installation"
+      exit 1
+    fi
+  else
+    log_error "Komari agent binary not found after installation"
+    exit 1
+  fi
+
+  log_ok "Komari agent installation completed successfully"
+fi
+
 # ──────────────────────────────────────────
-# 步骤 5: 生成 SSL 证书
+# 步骤 7: 生成 SSL 证书
 # ──────────────────────────────────────────
 log_step "Generate SSL Self-Signed Certificate"
 
@@ -285,115 +485,6 @@ if [ "$_skip_cert" = false ]; then
 fi
 
 # ============================================================
-# Komari Agent 集成
-# ============================================================
-#
-# 此部分添加 komari-agent 的安装与启动支持。
-# 安装路径固定为 /home/container/komari，通过 app.js 启动。
-# -e 参数用于链接 komari 服务器地址，-t 参数用于认证令牌。
-# 仅支持 Linux amd64 架构。
-# ============================================================
-
-# ──────────────────────────────────────────
-# 步骤 6: 安装 Komari Agent
-# ──────────────────────────────────────────
-log_step "Setup Komari Agent"
-
-# ---------- 配置参数 ----------
-KOMARI_ENABLED="${KOMARI_ENABLED:-true}"
-KOMARI_INSTALL_DIR="/home/container/komari"
-KOMARI_VERSION="${KOMARI_VERSION:-}"
-KOMARI_SERVER="${KOMARI_SERVER:-http://localhost:9182}"
-KOMARI_TOKEN="${KOMARI_TOKEN:-default}"
-
-# 构建启动参数（如果用户未自定义 KOMARI_ARGS 则使用默认值）
-if [ -z "$KOMARI_ARGS" ]; then
-  KOMARI_ARGS="-e ${KOMARI_SERVER} -t ${KOMARI_TOKEN}"
-fi
-
-# ---------- 检查是否启用 ----------
-if [ "$KOMARI_ENABLED" != "true" ]; then
-  log_info "Komari agent is disabled (KOMARI_ENABLED != 'true'), skipping installation"
-else
-  log_info "Starting komari agent installation..."
-
-  # ---------- 创建安装目录 ----------
-  run_cmd "Create komari agent directory: ${KOMARI_INSTALL_DIR}" \
-    mkdir -p "$KOMARI_INSTALL_DIR"
-
-  # ---------- 构建下载地址（仅 Linux amd64）----------
-  _file_name="komari-agent-linux-amd64"
-
-  if [ -z "$KOMARI_VERSION" ]; then
-    _download_path="latest/download"
-    _version_label="latest"
-  else
-    _download_path="download/${KOMARI_VERSION}"
-    _version_label="${KOMARI_VERSION}"
-  fi
-
-  _download_url="https://github.com/komari-monitor/komari-agent/releases/${_download_path}/${_file_name}"
-
-  # ---------- 下载二进制文件 ----------
-  log_info "Downloading ${_file_name} (${_version_label})..."
-  log_info "URL: ${_download_url}"
-
-  if curl -L -o "${KOMARI_INSTALL_DIR}/agent" "$_download_url" 2>&1; then
-    _download_size=$(wc -c < "${KOMARI_INSTALL_DIR}/agent" 2>/dev/null | tr -d ' ')
-    log_ok "Komari agent binary downloaded (${_download_size} bytes)"
-  else
-    log_error "Failed to download komari agent binary"
-    log_error "URL: ${_download_url}"
-    exit 1
-  fi
-
-  # ---------- 设置可执行权限 ----------
-  run_cmd "Set komari agent executable permission" \
-    chmod +x "${KOMARI_INSTALL_DIR}/agent"
-
-  log_ok "Komari agent installed to ${KOMARI_INSTALL_DIR}/agent"
-
-  # ---------- 将 komari-agent 添加到 app.js 启动 ----------
-  log_info "Adding komari-agent to app.js startup..."
-
-  # 将 KOMARI_ARGS 字符串拆分为 JS 数组元素
-  _args_str=""
-  for _arg in $KOMARI_ARGS; do
-    if [ -z "$_args_str" ]; then
-      _args_str="\"${_arg}\""
-    else
-      _args_str="${_args_str}, \"${_arg}\""
-    fi
-  done
-
-  # 移除 apps 数组的闭合标记 ];，然后追加 agent 条目
-  sed -i '/^];$/d' app.js
-  sed -i '$s/$/,/' app.js
-  {
-    echo '  {'
-    echo '    name: "komari-agent",'
-    echo "    binaryPath: \"${KOMARI_INSTALL_DIR}/agent\","
-    echo "    args: [${_args_str}]"
-    echo '  }'
-    echo '];'
-  } >> app.js
-
-  log_ok "Komari-agent added to app.js startup (server: ${KOMARI_SERVER})"
-
-  # ---------- 验证安装 ----------
-  log_info "Verifying komari agent installation..."
-  if [ -f "${KOMARI_INSTALL_DIR}/agent" ]; then
-    _size=$(wc -c < "${KOMARI_INSTALL_DIR}/agent" 2>/dev/null | tr -d ' ')
-    log_ok "Komari agent binary — ${KOMARI_INSTALL_DIR}/agent (${_size} bytes)"
-  else
-    log_error "Komari agent binary not found after installation"
-    exit 1
-  fi
-
-  log_ok "Komari agent installation completed successfully"
-fi
-
-# ============================================================
 # 安装总结
 # ============================================================
 echo ""
@@ -412,10 +503,11 @@ echo ""
 echo "  Komari Agent:"
 if [ "$KOMARI_ENABLED" = "true" ]; then
   echo "    • Status:          ${_C_OK}Installed${_C_RESET}"
-  echo "    • Binary:          ${_komari_agent_path}"
-  echo "    • Startup:         ${_C_OK}Integrated in app.js${_C_RESET}"
+  echo "    • Binary:          ${KOMARI_INSTALL_DIR}/agent"
+  echo "    • Server:          ${KOMARI_SERVER}"
+  echo "    • Startup:         ${_C_OK}Integrated into app.js${_C_RESET}"
 else
-  echo "    • Status:          Skipped (disabled by config)"
+  echo "    • Status:          Skipped (disabled)"
 fi
 echo ""
 
