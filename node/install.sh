@@ -226,8 +226,8 @@ if [ -z "$_keyPair" ]; then
   exit 1
 fi
 
-_privateKey=$(echo "$_keyPair" | grep "Private key" | awk '{print $3}')
-_publicKey=$(echo "$_keyPair" | grep "Public key" | awk '{print $3}')
+_privateKey=$(echo "$_keyPair" | grep "^PrivateKey:" | awk '{print $2}')
+_publicKey=$(echo "$_keyPair" | grep "^Password (PublicKey):" | awk '{print $3}')
 
 if [ -z "$_privateKey" ] || [ -z "$_publicKey" ]; then
   log_error "Failed to parse x25519 key pair from output"
