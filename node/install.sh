@@ -218,6 +218,8 @@ run_cmd "Remove temporary archive" \
 if [ -f "${XRAY_DIR}/xray" ]; then
   run_cmd "Rename xray binary to xy" \
     mv "${XRAY_DIR}/xray" "${XRAY_DIR}/xy"
+  run_cmd "Set executable permission on xy" \
+    chmod +x "${XRAY_DIR}/xy"
   log_ok "xray binary extracted and renamed to xy"
 else
   log_error "xray binary not found after extraction"
@@ -250,6 +252,7 @@ _publicKey=$(echo "$_keyPair" | grep "Public key" | awk '{print $3}')
 
 if [ -z "$_privateKey" ] || [ -z "$_publicKey" ]; then
   log_error "Failed to parse x25519 key pair from output"
+  log_error "Raw output from 'xy x25519': ${_keyPair}"
   exit 1
 fi
 
